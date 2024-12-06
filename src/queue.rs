@@ -17,7 +17,6 @@ impl<T> UnboundedBlockingMPMCQueue<T> {
     }
 }
 
-
 pub struct BoundedBlockingMPMCQueue<T> {
     queue: Mutex<VecDeque<T>>,
 }

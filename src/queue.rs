@@ -1,44 +1,66 @@
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Mutex, Condvar};
 
-pub struct UnboundedBlockingMPMCQueue<T>(Mutex<VecDeque<T>>);
+struct Queue<T> {
+    items: VecDeque<T>,
+    closed: bool,
+}
+
+impl<T> Queue<T> {
+    fn new() -> Self {
+        Self {
+            items: VecDeque::new(),
+            closed: false,
+        }
+    }
+    
+    fn push(&mut self, item: T) -> Result<(), ()> {
+        if (self.closed) {
+            return Err(())
+        }
+        Ok(self.items.push_back(item))
+    }
+    
+    fn pop(&mut self) -> Option<T> {
+        self.items.pop_front()
+    }
+    
+    fn close(&mut self) {
+        self.closed = true;
+    }
+} 
+
+pub struct UnboundedBlockingMPMCQueue<T> {
+    queue: Mutex<Queue<T>>,
+    queue_not_empty: Condvar,
+}
 
 impl<T> UnboundedBlockingMPMCQueue<T> {
     pub fn new() -> Self {
-        Self(Mutex::new(VecDeque::new()))
-    }
-
-    pub fn push(&self, task: T) {
-        self.0.lock().expect("queue poisoned").push_back(task);
-    }
-
-    pub fn pop(&self) -> Option<T> {
-        self.0.lock().expect("queue poisoned").pop_front()
-    }
-}
-
-pub struct BoundedBlockingMPMCQueue<T> {
-    queue: Mutex<VecDeque<T>>,
-}
-
-impl<T> BoundedBlockingMPMCQueue<T> {
-    pub fn new(capacity: usize) -> Self {
         Self {
-            queue: Mutex::new(VecDeque::with_capacity(capacity)),
+            queue: Mutex::new(Queue::new()),
+            queue_not_empty: Condvar::new(),
         }
     }
 
-    pub fn push(&self, task: T) -> Option<()> {
-        let mut queue = self.queue.lock().expect("queue poisoned");
-        if queue.len() == queue.capacity() {
-            None
-        } else {
-            queue.push_back(task);
-            Some(())
-        }
+    pub fn push(&self, value: T) {
+        let mut queue = self.queue.lock().unwrap();
+        queue.push(value).unwrap();
     }
 
     pub fn pop(&self) -> Option<T> {
-        self.queue.lock().expect("queue poisoned").pop_front()
+        let mut queue = self.queue.lock().unwrap();
+        while queue.items.is_empty() {
+            if (queue.closed) {
+                return None;
+            }
+            queue = self.queue_not_empty.wait(queue).unwrap();
+        }
+        queue.pop()
+    }
+    
+    pub fn close(&self) {
+        let mut queue = self.queue.lock().unwrap();
+        queue.close();
     }
 }

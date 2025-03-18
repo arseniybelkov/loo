@@ -1,47 +1,58 @@
-use crate::queue::{BoundedBlockingMPMCQueue, UnboundedBlockingMPMCQueue};
+use crate::queue::UnboundedBlockingMPMCQueue;
 use std::thread::{self, JoinHandle};
 
-pub struct ThreadPool {
+type Worker = JoinHandle<()>;
+
+pub struct ThreadPool<Task: FnOnce() + Send + 'static> {
     n_threads: usize,
-    workers: BoundedBlockingMPMCQueue<JoinHandle<()>>,
-    queue: UnboundedBlockingMPMCQueue<Box<dyn FnOnce() + 'static>>,
-    executor_handle: Option<JoinHandle<()>>,
+    workers: Vec<Worker>,
+    queue: UnboundedBlockingMPMCQueue<Task>,
 }
 
-impl ThreadPool {
+impl<Task: FnOnce() + Send + 'static> ThreadPool<Task> {
     pub fn new(n_threads: usize) -> Self {
         let mut this = Self {
             n_threads,
-            workers: BoundedBlockingMPMCQueue::new(n_threads),
+            workers: Vec::with_capacity(n_threads),
             queue: UnboundedBlockingMPMCQueue::new(),
-            executor_handle: None,
         };
         this.start();
         this
     }
-
-    pub fn submit<T: FnOnce() + 'static>(&self, task: T) {
-        let task = Box::new(task) as Box<dyn FnOnce()>;
-        self.queue.push(task);
-    }
-
-    fn start(&mut self) {
-        self.join_executor();
-        let handle = thread::spawn(|| {
-            
-        });
-        self.executor_handle = Some(handle);
-    }
     
-    fn join_executor(&mut self) {
-        if let Some(handle) = self.executor_handle.take() {
-            handle.join().expect("Executor thread panicked!");
+    fn start(&mut self) {
+        todo!("mpmc");
+        for _ in 0..self.n_threads {
+            self.workers.push(thread::spawn(|| {
+               self.work(); 
+            }));
         }
     }
+    
+    fn stop(&mut self) {
+        self.queue.close();
+        while let Some(worker) = self.workers.pop() {
+            worker.join().unwrap();
+        }
+    }
+    
+    fn work(&self) {
+        while let Some(task) = self.queue.pop() {
+            task();
+        }
+    }
+
+    pub fn submit(&self, task: Task) {
+        self.queue.push(task);
+    }
+    
 }
 
-impl Drop for ThreadPool {
+impl<Task> Drop for ThreadPool<Task>
+where
+    Task: FnOnce() + Send + 'static
+{
     fn drop(&mut self) {
-        self.join_executor();
+        self.stop();
     }
 }
